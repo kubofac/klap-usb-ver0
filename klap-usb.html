@@ -620,22 +620,6 @@ decLatLonDisplay.textContent=`DEC:${currentLat.toFixed(6)}/${currentLon.toFixed(
 functionupdateDebugDisplay(){
 if(!elem.debugInfo)return;
 
-// --- ボタンのクラス制御ロジックを追加 ---
-if(elem.gpsButton&&isGpsRunning){ // GPS監視が実行中の場合のみボタンの色を更新
-    consthasFix=latestGgaFixQuality>=1; // Fix Qualityが1以上で測位成功と見なす
-
-    if(hasFix){
-        elem.gpsButton.textContent='GPS(FIX)'; // 表示テキストも変更
-        elem.gpsButton.classList.remove('no-gps');
-        elem.gpsButton.classList.add('active-blue');
-    }else{
-        elem.gpsButton.textContent='GPS(NOFIX)'; // 測位できていない場合
-        elem.gpsButton.classList.remove('active-blue');
-        elem.gpsButton.classList.add('no-gps');
-    }
-}
-// ------------------------------------
-
 //💡既存のデバッグ情報
 constrateText=`総レート:${currentUpdateRate.toFixed(0)}Hz|RMCレート:${currentRmcUpdateRate.toFixed(0)}Hz|GGAレート:${currentGgaUpdateRate.toFixed(0)}Hz`;
 constrmcStatusText=`RMCStatus:${latestRmcStatus}`;
@@ -709,13 +693,9 @@ awaitdevice.selectConfiguration(device.configurations[0].configurationValue);
 }
 awaitdevice.claimInterface(INTERFACE_NUMBER);
 if(elem.statusDisplay)elem.statusDisplay.textContent='GPSモジュール接続完了。データ監視中...';
-
-// --- 変更: 接続成功時、Fixを待たず一旦監視中状態の表示に切り替える ---
-elem.gpsButton.textContent='GPS(監視中)'; 
+elem.gpsButton.textContent='GPS(停止)';
 elem.gpsButton.classList.remove('no-gps');
-// active-blueの付与は updateDebugDisplay に任せるため削除
-// ------------------
-
+elem.gpsButton.classList.add('active-blue');
 isGpsRunning=true;
 keepReading=true;
 startRateMeasurement();
@@ -748,13 +728,9 @@ device=null;
 }
 isGpsRunning=false;
 if(elem.statusDisplay)elem.statusDisplay.textContent='GPS監視停止';
-
-// --- 変更: 停止時は初期状態に戻す ---
 elem.gpsButton.textContent='GPS';
 elem.gpsButton.classList.remove('active-blue');
 elem.gpsButton.classList.add('no-gps');
-// ------------------
-
 if(elem.nmeaLog)elem.nmeaLog.textContent='NoNMEAdatayet...';
 currentLat=0.0;
 currentLon=0.0;
@@ -953,3 +929,6 @@ updateDebugDisplay();
 </script>
 </body>
 </html>
+
+
+
