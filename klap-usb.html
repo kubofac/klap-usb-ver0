@@ -258,6 +258,8 @@ let gpsThresholdValue = 20;
 let lapCoolDown = 15000;
 let isSettingsLoaded = false;
 let lapFixedDisplayTimeoutId = null;
+// 💡 追加: 実際に座標Fixが得られているかどうかの状態
+let hasFix = false; 
 
 const elem = {
     display: null,
@@ -290,7 +292,7 @@ const INTERFACE_NUMBER = 1;
 // --- 更新レート/デバッグ表示用変数 ---
 let lastUpdateTime = 0;    
 let updateCounter = 0;    
-let displayRateTimer = null;       
+let displayRateTimer = null;        
 let currentUpdateRate = 0;    
 let currentLat = 0.0;
 let currentLon = 0.0;
@@ -426,7 +428,7 @@ const clickLapSW = () => {
         lapCount++;
         const now = Date.now();
         const lapDuration = now - lapStartTime;
-        lapTimePrint(lapDuration);        
+        lapTimePrint(lapDuration);      
         lapStartTime = now;
         cancelAnimationFrame(lapTimerId);
         startRealtimeLap();
@@ -475,14 +477,18 @@ const getSettings = () => {
         if (elem.statusDisplay) elem.statusDisplay.textContent = `GPS設定: OK (閾値: ${gpsThresholdValue}m / C/D: ${lapCoolDown / 1000}秒)`;
         if (elem.debugInfo) elem.debugInfo.innerHTML = "GPS設定が読み込まれました。";
         isSettingsLoaded = true;
-        elem.getSettingsBtn.classList.remove('no-setting');
-        elem.getSettingsBtn.classList.add('active-blue');
+        if (elem.getSettingsBtn) {
+            elem.getSettingsBtn.classList.remove('no-setting');
+            elem.getSettingsBtn.classList.add('active-blue');
+        }
     } else {
         if (elem.statusDisplay) elem.statusDisplay.textContent = 'GPS設定: 未設定（設定ツールで保存してください）';
         if (elem.debugInfo) elem.debugInfo.innerHTML = "localStorageにGPS設定が見つかりません。";
         isSettingsLoaded = false;
-        elem.getSettingsBtn.classList.remove('active-blue');
-        elem.getSettingsBtn.classList.add('no-setting');
+        if (elem.getSettingsBtn) {
+            elem.getSettingsBtn.classList.remove('active-blue');
+            elem.getSettingsBtn.classList.add('no-setting');
+        }
     }
 };
 
@@ -542,6 +548,31 @@ function dmsToDecimal(dmm, direction) {
     }
 }
 
+/**
+ * 💡 GPSボタンの状態をFix Qualityに応じて更新する関数
+ * @param {boolean} isFixed Fix Qualityが1以上で座標が有効な場合 true
+ */
+function updateGpsButtonState(isFixed) {
+    if (!elem.gpsButton || !isGpsRunning) return;
+
+    // Fix状態が変化した場合のみ処理を行う
+    if (hasFix !== isFixed) {
+        hasFix = isFixed;
+        if (isFixed) {
+            // Fixあり: アクティブカラーに変更
+            elem.gpsButton.classList.remove('no-fix');
+            elem.gpsButton.classList.add('active-blue');
+            elem.gpsButton.textContent = 'GPS (FIX)';
+        } else {
+            // Fixなし: 非アクティブカラーに変更
+            elem.gpsButton.classList.remove('active-blue');
+            elem.gpsButton.classList.add('no-fix');
+            elem.gpsButton.textContent = 'GPS (NO FIX)';
+        }
+    }
+}
+
+
 // NMEAメッセージを解析し、位置情報オブジェクトを返す (GGAを位置の主軸、RMCを速度の主軸とする)
 function parseNmeaLine(line) {
     const parts = line.split(',');
@@ -554,6 +585,11 @@ function parseNmeaLine(line) {
         const fixQuality = parseInt(parts[6]);
         latestGgaFixQuality = fixQuality; // Fix Qualityをグローバル変数に保存
         latestGgaStatus = fixQuality > 0 ? `FIX(${fixQuality})` : 'NO FIX';
+
+        // 💡 変更点: Fix Qualityに応じてボタンの状態を更新
+        if (isGpsRunning) {
+             updateGpsButtonState(fixQuality > 0);
+        }
 
         // GGAが有効なFixを持つ場合、その座標で位置情報を更新し、ラップ計測ロジックに渡す
         if (fixQuality > 0) {
@@ -610,11 +646,11 @@ function parseNmeaLine(line) {
         } else {
              // 初回RMCの場合の初期化
              lastPosition = {
-                lat: currentLat, // 最新のGGA座標（または前回値）
-                lon: currentLon,
-                time: Date.now(),
-                speed: speedMps 
-            };
+                 lat: currentLat, // 最新のGGA座標（または前回値）
+                 lon: currentLon,
+                 time: Date.now(),
+                 speed: speedMps 
+             };
         }
 
         // RMCは位置情報を提供しないため、ここではnullを返す
@@ -636,12 +672,6 @@ function processNmeaData(data) {
         if (line.startsWith('$') && line.length > 5) {
             const position = parseNmeaLine(line);
             
-            // ------------------------------------------------------------------
-            // 💡 削除されたロジック:
-            // RMC/GGAメッセージに関するデバッグ情報（座標やステータス）の更新は、
-            // 全て parseNmeaLine 関数に集約されました。
-            // ------------------------------------------------------------------
-
             if (position && swState === SW_STATE.RUN) {
                 onWebUsbPositionUpdate(position);
             }
@@ -753,8 +783,6 @@ async function readLoop() {
                 const decoder = new TextDecoder('iso-8859-1');
                 const nmeaData = decoder.decode(result.data);
                 
-                // updateCounter++; // parseNmeaLine内のGGAでカウント
-
                 if (nmeaLogElement && nmeaData.length > 0) {
                     // NMEAログ表示が非表示
                     if (nmeaLogElement.style.display !== 'none') {
@@ -780,8 +808,15 @@ async function readLoop() {
 // WebUSB接続を開始
 async function startWebUsbGps() {
     try {
+        if (!elem.gpsButton) return;
+        
+        // 接続試行中の表示とスタイルの変更
         if (elem.statusDisplay) elem.statusDisplay.textContent = 'USBデバイスを検索中...';
         elem.gpsButton.textContent = '接続中...';    
+        elem.gpsButton.disabled = true; 
+        elem.gpsButton.classList.remove('active-blue', 'no-fix', 'no-gps'); // no-fixを追加
+        elem.gpsButton.classList.add('connecting'); 
+        
 
         device = await navigator.usb.requestDevice({
             filters: [{ vendorId: NMEA_VENDOR_ID, productId: NMEA_PRODUCT_ID }]
@@ -795,10 +830,12 @@ async function startWebUsbGps() {
         
         await device.claimInterface(INTERFACE_NUMBER);
         
+        // 接続成功時（この時点ではまだFixが得られていない可能性があるので、デフォルトでNO FIX/接続中の色にする）
         if (elem.statusDisplay) elem.statusDisplay.textContent = 'GPSモジュール接続完了。データ監視中...';
-        elem.gpsButton.textContent = 'GPS (停止)';
-        elem.gpsButton.classList.remove('no-gps');
-        elem.gpsButton.classList.add('active-blue');
+        elem.gpsButton.textContent = 'GPS (待機)';
+        elem.gpsButton.classList.remove('no-gps', 'connecting');
+        elem.gpsButton.classList.add('no-fix'); // 接続完了したがFixなしの色 (no-fixクラスを別途CSSで定義してください)
+        elem.gpsButton.disabled = false; 
         isGpsRunning = true;
         keepReading = true;
         
@@ -807,7 +844,7 @@ async function startWebUsbGps() {
         
     } catch (error) {
         if (elem.debugInfo) elem.debugInfo.innerHTML = `USB接続エラー: ${error.message}`;
-        stopGps();
+        stopGps(); // エラー時は停止処理を呼び出す
     }
 }
 
@@ -835,10 +872,16 @@ async function stopGps() {
         device = null;
     }
     isGpsRunning = false;
+    hasFix = false; // 状態をリセット
     if (elem.statusDisplay) elem.statusDisplay.textContent = 'GPS監視停止';
-    elem.gpsButton.textContent = 'GPS';
-    elem.gpsButton.classList.remove('active-blue');
-    elem.gpsButton.classList.add('no-gps');
+    
+    // 停止時の表示とスタイルのリセット
+    if (elem.gpsButton) {
+        elem.gpsButton.textContent = 'GPS';
+        elem.gpsButton.classList.remove('active-blue', 'connecting', 'no-fix'); 
+        elem.gpsButton.classList.add('no-gps'); // 初期状態に戻す
+        elem.gpsButton.disabled = false; 
+    }
     
     if(elem.nmeaLog) elem.nmeaLog.textContent = 'No NMEA data yet...';
     currentLat = 0.0;
@@ -847,10 +890,10 @@ async function stopGps() {
     latestRmcRawLatLon = 'N/A';
     latestGgaStatus = 'N/A';
     latestGgaRawLatLon = 'N/A';
-    latestGgaFixQuality = 0; // <--- ADDED reset
+    latestGgaFixQuality = 0; 
     lastPosition = null;
     
-    // 💡 停止時にデバッグ情報をリセット
+    // 停止時にデバッグ情報をリセット
     latestDistance = 0.0;
     latestTimeSinceLap = 0;
     latestIsCrossing = false;
@@ -937,7 +980,6 @@ function onWebUsbPositionUpdate(position) {
         return;
     }
 
-    // lastPositionの更新は、ラップ計測ロジックの最後に移動し、GGAまたはRMCによって最新の速度が既にlastPosition.speedに入っていることを前提とする
     // lastPositionの緯度/経度/時刻を一時的に変数に保存
     const P1_lat = lastPosition.lat;
     const P1_lon = lastPosition.lon;
@@ -1061,16 +1103,29 @@ window.onload = () => {
     if (!navigator.usb) {
         if (elem.statusDisplay) elem.statusDisplay.textContent = 'エラー: WebUSB非対応ブラウザです。';
         if (elem.gpsButton) elem.gpsButton.disabled = true;
+        if (elem.gpsButton) {
+            elem.gpsButton.classList.remove('active-blue', 'connecting', 'no-fix');
+            elem.gpsButton.classList.add('no-gps');
+        }
     }
     
     // 初回表示の更新と設定の読み込み
     updateButtonDisplay();
     getSettings();
     updateDebugDisplay();
+    
+    // GPSボタンの初期状態設定
+    if (navigator.usb && elem.gpsButton) {
+        if (!isGpsRunning) {
+             elem.gpsButton.classList.remove('active-blue', 'connecting', 'no-fix');
+             elem.gpsButton.classList.add('no-gps');
+        }
+    }
 };
 
 </script>
 </body>
 </html>
+
 
 
